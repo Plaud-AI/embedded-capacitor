@@ -1,0 +1,312 @@
+@import "tailwindcss";
+
+/* ============================================================
+   PLAUD DESIGN SYSTEM — "dev" language
+   Developer-platform / dark surface foundations, adapted for the
+   Plaud PWA. Tokens + fonts lifted from
+   plaud-design-system/dev/colors_and_type.css; font URLs point at
+   the copies vendored under /public/fonts.
+   ============================================================ */
+
+/* ---------- FONTS ---------- */
+@font-face {
+  font-family: "Jokker";
+  src: url("/fonts/Jokker-Regular.woff") format("woff");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Jokker";
+  src: url("/fonts/Jokker-Italic.woff") format("woff");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Jokker";
+  src: url("/fonts/Jokker-Semibold.woff") format("woff");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Jokker";
+  src: url("/fonts/Jokker-SemiboldItalic.woff") format("woff");
+  font-weight: 600;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Roboto Mono";
+  src: url("/fonts/RobotoMono-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  /* Absolutes */
+  --plaud-black: #000000;
+  --plaud-white: #ffffff;
+
+  /* Dark surfaces */
+  --dev-surface: #0f0f0f;
+  --dev-surface-footer: #090909;
+  --dev-surface-input: #1d1d1d;
+  --dev-surface-card: rgba(29, 29, 29, 0.7);
+
+  /* Text ramp */
+  --dev-text-white: #ffffff;
+  --dev-text-light: #ebebeb;
+  --dev-text-muted: #adadad;
+  --dev-text-dim: #858585;
+  --dev-text-faint: #5c5c5c;
+  --dev-text-placeholder: #5c5c5c;
+
+  /* Borders */
+  --dev-border-subtle: #333333;
+  --dev-border-focus: #5c5c5c;
+
+  /* Accent + status */
+  --dev-accent-blue: #00d0ff;
+  --dev-status-error: #f15042;
+  --status-ok: #36d96c;
+  --status-warn: #fabe3e;
+
+  /* Semantic */
+  --fg-1: var(--dev-text-white);
+  --fg-2: var(--dev-text-dim);
+  --fg-3: var(--dev-text-faint);
+  --bg-1: var(--dev-surface);
+  --stroke-2: var(--dev-border-subtle);
+  --stroke-3: var(--dev-border-focus);
+
+  /* Typography */
+  --font-sans: "Jokker", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "Roboto Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, "Liberation Mono", "Courier New", monospace;
+  --fw-regular: 400;
+  --fw-semibold: 600;
+
+  /* Radius */
+  --radius-sm: 5px;
+  --radius-pill: 999px;
+
+  /* Shadows */
+  --shadow-sm: 0 4px 20px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 24px 60px rgba(0, 0, 0, 0.45);
+
+  /* Blur */
+  --dev-blur-card: 10px;
+  --dev-blur-chrome: 26px;
+
+  /* Motion */
+  --ease-standard: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-fast: 120ms;
+  --dur-base: 220ms;
+  --dur-reveal: 800ms;
+  --opacity-hover-primary: 0.8;
+  --opacity-hover-secondary: 0.7;
+  --opacity-hover-link: 0.6;
+
+  /* Expose to Tailwind's color utilities */
+  --background: var(--dev-surface);
+  --foreground: var(--dev-text-white);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+}
+
+html,
+body {
+  font-family: var(--font-sans);
+  color: var(--dev-text-white);
+  background: var(--dev-surface);
+  font-weight: var(--fw-regular);
+  line-height: 1.3;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-sans);
+  font-weight: var(--fw-regular);
+  letter-spacing: -0.01em;
+  line-height: 1.05;
+  color: var(--dev-text-white);
+  margin: 0;
+  text-wrap: balance;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.caption {
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--dev-text-faint);
+}
+
+.overline {
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--dev-text-faint);
+  font-weight: var(--fw-semibold);
+}
+
+::selection {
+  background: var(--dev-accent-blue);
+  color: var(--plaud-black);
+}
+
+/* ---------- Components ---------- */
+
+/* Frosted card — the signature dev surface */
+.dev-card {
+  background: var(--dev-surface-card);
+  -webkit-backdrop-filter: blur(var(--dev-blur-card));
+  backdrop-filter: blur(var(--dev-blur-card));
+  border: 1px solid var(--dev-border-subtle);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Buttons — opacity-driven hovers, never lift/scale */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: var(--font-sans);
+  font-weight: var(--fw-semibold);
+  font-size: 15px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  height: 44px;
+  padding: 0 24px;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: opacity var(--dur-base) var(--ease-standard);
+}
+.btn-primary {
+  background: var(--plaud-white);
+  color: var(--plaud-black);
+}
+.btn-primary:hover {
+  opacity: var(--opacity-hover-primary);
+}
+.btn-secondary {
+  background: transparent;
+  color: var(--dev-text-white);
+  border-color: var(--dev-border-subtle);
+}
+.btn-secondary:hover {
+  opacity: var(--opacity-hover-secondary);
+}
+.btn-destructive {
+  background: transparent;
+  color: var(--dev-status-error);
+  border-color: rgba(241, 80, 66, 0.4);
+}
+.btn-destructive:hover {
+  opacity: var(--opacity-hover-secondary);
+}
+.btn:disabled {
+  opacity: 0.3;
+  pointer-events: none;
+}
+
+/* Row — tappable list item (device / recording) */
+.dev-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  background: var(--dev-surface-input);
+  border: 1px solid var(--dev-border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: opacity var(--dur-base) var(--ease-standard);
+}
+.dev-row:hover {
+  opacity: var(--opacity-hover-secondary);
+}
+
+/* Status pill */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--dev-border-subtle);
+  color: var(--dev-text-muted);
+  white-space: nowrap;
+}
+
+/* ---------- Motion ---------- */
+@keyframes reveal-up {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 24px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+.reveal {
+  opacity: 0;
+  animation: reveal-up var(--dur-reveal) var(--ease-standard) forwards;
+}
+.delay-100 { animation-delay: 120ms; }
+.delay-200 { animation-delay: 240ms; }
+.delay-300 { animation-delay: 360ms; }
+
+@keyframes rec-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+}
+.rec-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--dev-status-error);
+  box-shadow: 0 0 0 4px rgba(241, 80, 66, 0.18);
+  animation: rec-pulse 1.4s var(--ease-standard) infinite;
+}
+
+/* Waveform — the one lively motion allowed (recording) */
+@keyframes wave {
+  0%, 100% { transform: scaleY(0.35); }
+  50% { transform: scaleY(1); }
+}
+.wave-bar {
+  width: 3px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--dev-status-error);
+  transform-origin: center;
+  animation: wave 1s var(--ease-standard) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal { opacity: 1; transform: none; animation: none; }
+  .rec-dot, .wave-bar { animation: none; }
+}
