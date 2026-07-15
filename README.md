@@ -10,7 +10,7 @@ The Skill has context on the Plaud Embedded Wrapper to help you implement this
 wrapper for your web app.
 
 ```bash
-npx skills add jackmuva/plaud-embedded-capacitor-wrapper
+npx skills add Plaud-AI/embedded-capacitor
 ```
 
 ### Step 1: Setup Capacitor
@@ -186,3 +186,4 @@ Calling the PlaudSdk pushes data through the Capacitor bridge to the native swif
 │    BLE, Files, iOS APIs, Events          │
 └──────────────────────────────────────────┘
 ```
+
