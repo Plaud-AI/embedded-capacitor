@@ -10,12 +10,14 @@ The demo app is included in the Plaud Embedded plugin as reference for implement
 ```bash
 git clone https://github.com/Plaud-AI/embedded-capacitor.git
 ```
-### 2. Install dependencies and set up env vars">
+
+### 2. Install dependencies and set up env vars
 ```bash
 cd nextjs-demo
 npm i
 ```
-### 3. Build and open in XCode">
+
+### 3. Build and open in XCode
 ```bash
 npx cap sync ios
 npx cap open ios
