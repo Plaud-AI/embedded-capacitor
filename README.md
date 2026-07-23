@@ -2,7 +2,31 @@
 
 This plugin helps you convert **web apps to iOS** that implement [Plaud Embedded](https://docs.plaud.ai/plaud-embedded) to integrate with Plaud devices.
 
-## How to use
+## How to run the demo app
+
+The demo app is included in the Plaud Embedded plugin as reference for implementing the plugin in your own app and seeing how everything works.
+
+### 1. Clone the Embedded Capacitor repo
+```bash
+git clone https://github.com/Plaud-AI/embedded-capacitor.git
+```
+
+### 2. Install dependencies and set up env vars
+```bash
+cd nextjs-demo
+npm i
+```
+
+### 3. Build and open in XCode
+```bash
+npx cap sync ios
+npx cap open ios
+```
+In XCode, make sure to include your Apple developer credentials and certificate. 
+
+Then **run on a physical device** to test out the demo app with your Plaud devices.
+
+## How to use in your own app
 
 ### Step 0: Install the skill from this repo
 
