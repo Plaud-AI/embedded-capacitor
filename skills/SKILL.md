@@ -1,5 +1,5 @@
 ---
-name: plaud-embedded-capacitor-wrapper
+name: plaud-embedded-capacitor-skill
 description: Wrap an existing web app in a Capacitor iOS shell so it can talk to Plaud recording devices over Bluetooth via the Plaud Embedded SDK. Use this when a user has a web app (React/Next.js/etc.) that implements Plaud Embedded and wants to ship it as an iOS app, or wants to call the native PlaudSdk Capacitor plugin (scan, connect, list files, export/decode audio) from JavaScript.
 ---
 
@@ -46,6 +46,14 @@ If the user hasn't set up Plaud Embedded credentials or auth yet, they need the
 
 Follow these in order. Each step has a detailed reference file; read the reference before
 running the commands.
+
+### Step 0 - If the Plaud-AI/embedded-capacitor repo is not cloned
+
+Clone the Plaud-AI/embedded-capacitor if not done so. The PlaudPlugin as well as a sample app will be available in this repo.
+
+```bash
+git clone https://github.com/Plaud-AI/embedded-capacitor.git
+```
 
 ### Step 1 — Install and initialize Capacitor
 
