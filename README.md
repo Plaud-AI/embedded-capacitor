@@ -1,13 +1,13 @@
-# Plaud Embedded's Capacitor Wrapper
+# Plaud Embedded's Capacitor Plugin
 
-This wrapper helps you convert **web apps to iOS** that implement [Plaud Embedded](https://docs.plaud.ai/plaud-embedded) to integrate with Plaud devices.
+This plugin helps you convert **web apps to iOS** that implement [Plaud Embedded](https://docs.plaud.ai/plaud-embedded) to integrate with Plaud devices.
 
 ## How to use
 
 ### Step 0: Install the skill from this repo
 
-The Skill has context on the Plaud Embedded Wrapper to help you implement this 
-wrapper for your web app.
+The Skill has context on the Plaud Embedded plugin to help you implement this 
+plugin for your web app.
 
 ```bash
 npx skills add Plaud-AI/embedded-capacitor
@@ -48,20 +48,16 @@ After steps 1–2, your `ios/` directory should look like this (★ = files/fold
 ios/
 ├── App/
 │   ├── App/
-│   │   ├── AppDelegate.swift
-│   │   ├── Assets.xcassets/
-│   │   ├── Base.lproj/
-│   │   │   ├── LaunchScreen.storyboard
-│   │   │   └── Main.storyboard          # set MainViewController as the Bridge VC's custom class
-└── PlaudPlugin/                        ★ # local SwiftPM plugin package (the whole folder)
-    ├── Package.swift                     # declares the 3 xcframeworks as binary targets
-    ├── Frameworks/                     ★
+│   │   └── MainViewController.swift
+└── PlaudPlugin/
+    ├── Package.swift
+    ├── Frameworks/ 
     │   ├── PlaudBleSDK.xcframework
     │   ├── PlaudDeviceBasicSDK.xcframework
     │   └── PlaudWiFiSDK.xcframework
     └── Sources/
         └── PlaudPlugin/
-            └── PlaudSdkPlugin.swift      # the CAPPlugin bridge (JS ↔ native SDK)
+            └── PlaudSdkPlugin.swift
 ```
 
 3. Link `PlaudPlugin` into the App target in Xcode. 
@@ -166,9 +162,9 @@ const handleConnect = async (d: PlaudScanDevice) => {
   };
 ```
 
-## How the Capacitor Wrapper Works
+## How the Capacitor plugin Works
 
-The Capacitor Wrapper wraps your web app in a Capacitor native shell that serves your web app's URL in a webkit view (WKWebView). The wrapper includes a bridge where native Swift code can be called via Javascript.
+The Capacitor plugin wraps your web app in a Capacitor native shell that serves your web app's URL in a webkit view (WKWebView). The plugin includes a bridge where native Swift code can be called via Javascript.
 
 Calling the PlaudSdk pushes data through the Capacitor bridge to the native swift code. Callbacks push data from native features to the Capacitor bridge to the Capacitor JS plugin via event listeners.
 
