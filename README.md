@@ -182,4 +182,3 @@ Calling the PlaudSdk pushes data through the Capacitor bridge to the native swif
 │    BLE, Files, iOS APIs, Events          │
 └──────────────────────────────────────────┘
 ```
-
