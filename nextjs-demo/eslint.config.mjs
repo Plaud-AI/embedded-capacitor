@@ -16,6 +16,8 @@ const eslintConfig = defineConfig([
     "plaud-design-system/**",
     // Native build output (vendored frameworks / Capacitor bridge).
     "ios/**/.build/**",
+    // Gradle build output — includes Capacitor's generated native-bridge.js.
+    "android/**/build/**",
   ]),
 ]);
 

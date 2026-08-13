@@ -6,14 +6,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A Next.js PWA that talks to Plaud recording hardware over Bluetooth. iOS has no Web
-Bluetooth, so the app is wrapped in a Capacitor native shell that loads the live Vercel
-deployment in a `WKWebView` and exposes Plaud's precompiled iOS SDK to the web layer via a
-custom Capacitor plugin. **Read `README.md` before making architectural changes** — it is
-the authoritative, detailed description of the whole bridge (why the native shell exists,
-how the three vendor xcframeworks are packaged, the non-obvious manual plugin-registration
-step, and the full JS↔native call chain). Do not duplicate its contents here; this file
-only adds what the README doesn't cover.
+A Next.js PWA that talks to Plaud recording hardware over Bluetooth. The app is wrapped in a
+Capacitor native shell that loads the live Vercel deployment in a WebView and exposes Plaud's
+precompiled native SDK to the web layer via a custom Capacitor plugin. **Both iOS and Android
+are implemented, at deliberate parity** — one JS surface (`lib/plaud-sdk.ts`), two native
+plugins with identical method names, event names, and payload shapes.
+
+**Read `README.md` before making architectural changes** — it is the authoritative, detailed
+description of the whole bridge (why the native shell exists, how the three vendor xcframeworks
+and the one Android `.aar` are packaged, the non-obvious manual plugin-registration step on each
+platform, the full JS↔native call chain, and a table of the few places the two platforms
+genuinely differ). Do not duplicate its contents here; this file only adds what the README
+doesn't cover.
 
 ## Commands
 
@@ -29,12 +33,20 @@ There is no test suite. To test native/Bluetooth behavior:
 ```bash
 npx cap sync ios     # after any web/plugin/config change
 npx cap open ios     # opens Xcode — build/run on a physical iPhone (frameworks are arm64 device-only, no Simulator)
+
+npx cap sync android
+npx cap open android                       # or: cd android && ./gradlew :app:assembleDebug
 ```
 
-`capacitor.config.ts` points the iOS shell at the deployed Vercel URL, not local bundled
+Android requires **JDK 21+** (Capacitor 8 compiles at `sourceCompatibility 21`); a system JDK 17
+fails with `invalid source release: 21`. Android Studio's bundled JBR works:
+`JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew :app:assembleDebug`.
+Run on a physical device on both platforms — an emulator has no Bluetooth radio.
+
+`capacitor.config.ts` points both shells at the deployed Vercel URL, not local bundled
 assets — **web changes must be deployed to Vercel before they're visible on device.**
-Swift changes (the plugin, `MainViewController`) require an Xcode rebuild; a web deploy
-alone won't pick them up.
+Native changes (the plugins, `MainViewController`, `MainActivity`) require an Xcode/Gradle
+rebuild; a web deploy alone won't pick them up.
 
 ## Architecture
 
@@ -45,9 +57,10 @@ alone won't pick them up.
   app) and refreshes the file list after a stop. Each successful `exportAudio` automatically
   feeds the upload + transcription flow below; `app/FileModal.tsx` renders playback +
   transcript state per session.
-- `lib/plaud-sdk.ts` — typed wrapper around `registerPlugin<PlaudSdkPlugin>("PlaudSdk")`.
-  Outside the Capacitor iOS shell these calls reject with "not implemented" — guard
-  native-only calls with `Capacitor.isNativePlatform()`. Because the WebView loads a
+- `lib/plaud-sdk.ts` — typed wrapper around `registerPlugin<PlaudSdkPlugin>("PlaudSdk")`,
+  shared by both platforms. Outside a Capacitor native shell these calls reject with "not
+  implemented" — guard native-only calls with `Capacitor.isNativePlatform()` (never a
+  platform-specific check; the plugin surface is the same on iOS and Android). Because the WebView loads a
   **remote** origin (the Vercel URL), plain browser `fetch()` can't read exported files or
   PUT to S3 presigned URLs (cross-origin/CORS). Two extra plugin methods route around
   this: `readFile` (reads an exported file's bytes through native code instead of
@@ -81,17 +94,30 @@ alone won't pick them up.
 - `ios-sdk-reference.md` — generated reference for the vendor SDK; it can drift, so verify
   real signatures against the `.swiftinterface` files under each `*.framework/Modules/`
   when adding plugin methods.
+- `android/` — the Android shell. `app/libs/plaud-sdk.aar` is the vendored SDK;
+  `app/src/main/java/ai/plaud/pwademo/PlaudSdkPlugin.java` is the bridge class (the Swift
+  plugin's counterpart) and `MainActivity.java` registers it. Two Android-only traps: the
+  `.aar` has no dependency metadata, so its transitive deps are declared by hand in
+  `app/build.gradle` (a missing one is a *runtime* `NoClassDefFoundError`, not a build error);
+  and `android/.gitignore` needs its `!app/libs/plaud-sdk.aar` negation or the vendored SDK
+  silently isn't committed. There is no published Android SDK doc — the AAR's bytecode
+  (`javap`) and its `proguard.txt` are the reference. It's partly obfuscated: `sdk.*` and
+  `com.tinnotech.penblesdk.*` are real API, `process_item_data`-style names are internals.
 - `plaud-design-system/` — the design tokens/CSS (`colors_and_type.css`) and UI kit
   reference this app's styling is built from; check it before hand-rolling new colors or
   type styles.
 
 ## Extending the native plugin
 
-When adding a Plaud device feature, mirror the existing pattern end to end: add the
-`CAPPluginMethod`/`@objc func` in `PlaudSdkPlugin.swift`, forward any SDK delegate
-callbacks via `notifyListeners`, and add the matching method/listener types in
-`lib/plaud-sdk.ts`. Changing or adding plugin methods changes the native binary — it needs
-an Xcode rebuild and redeploy to a physical device, not just a Vercel deploy.
+When adding a Plaud device feature, mirror the existing pattern end to end **on both
+platforms**: add the `CAPPluginMethod`/`@objc func` in `PlaudSdkPlugin.swift` *and* the
+`@PluginMethod` in `PlaudSdkPlugin.java`, forward any SDK delegate/listener callbacks via
+`notifyListeners` (`emit` on Android), and add the matching method/listener types in
+`lib/plaud-sdk.ts`. Parity is maintained by hand, so a method added on one platform only
+rejects with "not implemented" on the other; if an asymmetry is genuinely unavoidable, record
+it in README §2.5 and on the TS type rather than papering over it with invented values.
+Changing or adding plugin methods changes the native binary — it needs an Xcode/Gradle rebuild
+and redeploy to a physical device, not just a Vercel deploy.
 
 ## Notes
 

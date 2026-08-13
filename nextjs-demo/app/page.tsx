@@ -148,7 +148,7 @@ export default function Home() {
 
   const ensureNative = () => {
     if (!Capacitor.isNativePlatform()) {
-      setError("Native Plaud SDK is only available inside the iOS app shell.");
+      setError("Native Plaud SDK is only available inside the iOS or Android app shell.");
       return false;
     }
     return true;

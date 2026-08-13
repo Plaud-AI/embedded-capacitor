@@ -1,0 +1,85 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace = "ai.plaud.pwademo"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "ai.plaud.pwademo"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName "1.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    // Picks up libs/plaud-sdk.aar — the precompiled Plaud Android SDK, the counterpart to
+    // the three xcframeworks under ios/PlaudPlugin/Frameworks.
+    implementation fileTree(include: ['*.jar', '*.aar'], dir: 'libs')
+
+    // The Plaud SDK ships as a bare .aar, which (unlike a Maven artifact) carries no POM,
+    // so none of its transitive dependencies come along automatically. Every third-party
+    // package its bytecode references has to be declared here or the app dies at runtime
+    // with NoClassDefFoundError the first time that code path runs. Derived from the
+    // external packages referenced in the AAR's classes.jar:
+    //   kotlin/*, kotlinx/coroutines/*  -> the SDK is written in Kotlin
+    //   okhttp3/*, okio/*, retrofit2/*  -> its HTTP + REST layer
+    //   com/google/gson, com/google/common -> JSON + Guava
+    //   org/bouncycastle/crypto         -> device handshake crypto
+    //   org/java_websocket/*            -> WiFi fast-transfer websocket
+    //   org/slf4j, ch/qos/logback       -> its logging facade (res/raw/logback.xml)
+    //   timber/log                      -> its logging frontend
+    // Note: the "Conscrypt" reference in the SDK is a JCE *provider name* string, resolved
+    // from the platform provider inside a try/catch — it needs no dependency here.
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlinVersion"
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:$coroutinesVersion"
+    implementation "com.squareup.okhttp3:okhttp:$okhttpVersion"
+    implementation "com.squareup.okhttp3:logging-interceptor:$okhttpVersion"
+    implementation "com.squareup.retrofit2:retrofit:$retrofitVersion"
+    implementation "com.squareup.retrofit2:converter-gson:$retrofitVersion"
+    implementation "com.google.code.gson:gson:$gsonVersion"
+    implementation "com.google.guava:guava:$guavaVersion"
+    implementation "org.bouncycastle:bcprov-jdk18on:$bouncyCastleVersion"
+    implementation "org.java-websocket:Java-WebSocket:$javaWebSocketVersion"
+    implementation "org.slf4j:slf4j-api:$slf4jVersion"
+    implementation "com.github.tony19:logback-android:$logbackAndroidVersion"
+    implementation "com.jakewharton.timber:timber:$timberVersion"
+
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}
