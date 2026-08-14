@@ -4,6 +4,12 @@ The full flow: **init → scan → connect → list files → export → (transc
 itself happens on the physical device; the app observes it and exports the resulting files.
 Snippets below are trimmed from the reference app's `app/page.tsx`.
 
+**Every snippet here runs unchanged on iOS and Android.** The two native plugins register
+under the same `PlaudSdk` name, expose the same methods and emit the same events, so there is
+no `Capacitor.getPlatform()` branching anywhere in this file — not even for Android's runtime
+Bluetooth permissions, which `startScan()` requests on your behalf. The handful of values
+that genuinely differ per platform are listed in "Platform differences" at the end.
+
 ## 1. Subscribe to events (once, on mount)
 
 Register listeners in an effect and remove them on cleanup. Guard on
@@ -63,8 +69,9 @@ const handleScan = async () => {
 
 ## 3. Connect
 
-Stop scanning, then connect by `uuid` (preferred). Connection progress comes back on the
-`connectState` event registered above.
+Stop scanning, then connect by `uuid` (preferred). Treat `uuid` as an opaque token — it's the
+CoreBluetooth peripheral UUID on iOS and the MAC address on Android, but the same call works
+on both. Connection progress comes back on the `connectState` event registered above.
 
 ```typescript
 const handleConnect = async (d: PlaudScanDevice) => {
@@ -76,7 +83,9 @@ const handleConnect = async (d: PlaudScanDevice) => {
 ## 4. Export a recording
 
 Files come from the `fileList` event. Exporting decodes the proprietary on-device format to a
-standard file (use `mp3`) and resolves with the on-disk path.
+standard file (use `mp3`) and resolves with the on-disk path — inside a private per-app
+directory (`Documents/PlaudExports` on iOS, `files/PlaudExports` on Android). Use the
+returned `outputPath` rather than constructing a path yourself.
 
 ```typescript
 const exportRecording = async (f: PlaudFile) => {
@@ -111,6 +120,45 @@ const handleDepair = async () => {
   await PlaudSdk.depair({ clear: true });   // result arrives on the "depair" event
 };
 ```
+
+## Platform differences
+
+Only these values differ; the calls above don't change:
+
+| | iOS | Android |
+| --- | --- | --- |
+| `PlaudScanDevice.uuid` | CoreBluetooth peripheral UUID | MAC address (also in `macAddress`) |
+| `PlaudScanDevice.supportWiFi` | from the scan record | always `false` until connected |
+| `PlaudPenState` | 7 fields | 4 — `findMyToken`, `hasSndpKey`, `deviceAccessToken` absent |
+| `PlaudFile.duration` | exact | slightly long for `isOgg` files (frame arithmetic) |
+| Export dir | `Documents/PlaudExports` | `files/PlaudExports` |
+| BLE permission prompt | none (Info.plist only) | requested inside `startScan()` / `connectBleDevice()` |
+
+If a value can be absent on one platform, it's optional in the TS type — so TypeScript makes
+you handle it. Don't fall back to `0`; check for `undefined`.
+
+## Debugging a failing connect (Android only)
+
+The Android SDK collapses every failure mode into `connectState { failed: true }`, so the
+plugin attaches a raw transport listener and re-emits the detail. These events **never fire
+on iOS** — subscribing to them unconditionally is harmless, and they're the fastest way to
+see why a pairing didn't take.
+
+```typescript
+await PlaudSdk.addListener("connectFail", ({ reason }) => {
+  // e.g. "USER_REFUSE" (declined on the device), "RECORDING_NOW" (pen busy),
+  // "MODE_NOT_MATCH" (pen not in connect mode), "TIME_OUT", "permissionDenied"
+  setError(`connect failed: ${reason}`);
+});
+await PlaudSdk.addListener("connectStage", ({ stage, message }) => {
+  // "gatt_connect" → "first_handshake" → "handshake_get_ssn" → … — shows how far it got
+});
+await PlaudSdk.addListener("handshakeWaitSure", () => {
+  setStatus("confirm the pairing on the device");   // the pen is waiting on a physical press
+});
+```
+
+Native-side logs: `adb logcat -s PlaudSdk:V BleAgentImpl:V`.
 
 ## Flow summary
 

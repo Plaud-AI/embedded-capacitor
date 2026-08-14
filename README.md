@@ -1,10 +1,6 @@
 # Plaud Embedded's Capacitor Plugin
 
-This plugin helps you convert **web apps to iOS and Android** that implement [Plaud Embedded](https://docs.plaud.ai/plaud-embedded) to integrate with Plaud devices.
-
-Both platforms expose the **same JavaScript surface** (`PlaudSdk`), so your web app code is
-written once. Only the native shell differs: Swift + xcframeworks on iOS, Java + an `.aar`
-on Android.
+This plugin helps you convert **web apps to iOS and Android apps** that implement [Plaud Embedded](https://docs.plaud.ai/plaud-embedded) to integrate with Plaud devices.
 
 ## How to run the demo app
 
@@ -35,8 +31,6 @@ Then **run on a physical device** to test out the demo app with your Plaud devic
 npx cap sync android
 npx cap open android
 ```
-The Gradle build pulls the Plaud SDK from `android/app/libs/plaud-sdk.aar` and its
-transitive dependencies from Maven — the first sync will take a few minutes.
 
 Then **run on a physical device** as well. The Android emulator has no Bluetooth radio, so
 scanning finds nothing there.
@@ -80,7 +74,7 @@ npx cap sync android
 ```
 
 
-### Step 2 (iOS): Copy PlaudPlugin files
+### Step 2a: For iOS, copy PlaudPlugin files
 
 1. Copy the `ios/PlaudPlugin/` framework and paste into the `ios/` directory.
 
@@ -113,10 +107,6 @@ Open the project (`npx cap open ios`), then **File → Add Package Dependencies�
    While you're there, make sure the App target's **minimum deployment is iOS 15.0 or higher** —
    the Plaud xcframeworks require it (`Package.swift` declares `.iOS(.v15)`), and the
    frameworks are arm64 **device-only** builds, so run on a physical iPhone, not the Simulator.
-
-   > Linking the package (this step) is what lets the code compile; registering the plugin
-   > instance in `MainViewController.swift`'s `capacitorDidLoad()` is a separate, runtime step —
-   > you need both.
 
 4. Add the Bluetooth entitlement in `ios/App/App/Info.plist`
 
@@ -178,13 +168,10 @@ note `packageClassList`, which sync injects when it detects the installed `bluet
 }
 ```
 
-### Step 2 (Android): Copy PlaudPlugin files
-
-Everything under `android/` in this repo is a stock `npx cap add android` template plus
-five deltas. Apply those five to your own `android/` directory:
+### Step 2b For Android: Copy PlaudPlugin files
 
 1. Copy `android/app/libs/plaud-sdk.aar` into your `android/app/libs/` directory. This is the
-   precompiled Plaud Android SDK — the counterpart to the three iOS xcframeworks.
+   precompiled Plaud Android SDK
 
 2. Copy `android/app/src/main/java/ai/plaud/pwademo/PlaudSdkPlugin.java` into your app's
    package directory, and **change its `package` declaration** to match your `applicationId`.
@@ -201,31 +188,21 @@ public class MainActivity extends BridgeActivity {
 }
 ```
 
-   > Capacitor auto-discovers plugins from installed npm packages. `PlaudSdk` is app-local,
-   > so it isn't in that list and must be registered by hand — otherwise JS calls fail with
-   > *"PlaudSdk plugin is not implemented on android"*. This is the Android counterpart to
-   > iOS's `MainViewController.capacitorDidLoad()`.
-
-After steps 1–3, your `android/` directory should look like this (★ = files you copied in):
+After steps 1–3, your `android/` directory should look like this:
 
 ```
 android/
 ├── app/
 │   ├── libs/
-│   │   └── plaud-sdk.aar                ★
+│   │   └── plaud-sdk.aar                (copied)
 │   ├── build.gradle                     (edited, step 4)
 │   └── src/main/java/<your/package>/
 │       ├── MainActivity.java            (edited, step 3)
-│       └── PlaudSdkPlugin.java          ★
+│       └── PlaudSdkPlugin.java          (copied) 
 └── variables.gradle                     (edited, step 4)
 ```
 
-4. Declare the SDK's dependencies in `android/app/build.gradle`. The Plaud SDK ships as a
-   bare `.aar`, which (unlike a Maven artifact) carries no POM — so **none** of its
-   transitive dependencies come along automatically. Every one has to be declared by hand or
-   the app dies at runtime with `NoClassDefFoundError` the first time that code path runs.
-
-   Widen the stock `fileTree` to pick up `.aar` files, then add the dependency block:
+4. Declare the SDK's dependencies in `android/app/build.gradle`. 
 
 ```gradle
 dependencies {
@@ -271,58 +248,7 @@ ext {
 }
 ```
 
-   Each group maps to a part of the SDK: Kotlin + coroutines (the SDK is written in Kotlin),
-   OkHttp/Retrofit/Gson (its HTTP + REST layer), Guava, BouncyCastle (device handshake
-   crypto), Java-WebSocket (WiFi fast transfer), and SLF4J/logback/Timber (logging).
-
-5. **Bluetooth permissions need no manifest changes.** `android/app/src/main/AndroidManifest.xml`
-   is byte-for-byte the stock template — `BLUETOOTH_SCAN`, `BLUETOOTH_CONNECT`, and
-   `ACCESS_FINE_LOCATION` are merged in from `@capacitor-community/bluetooth-le`'s own
-   manifest at build time, and `PlaudSdkPlugin` requests them at runtime inside `startScan()`.
-   If you skip the `bluetooth-le` package, declare them yourself:
-
-```xml
-<uses-permission android:name="android.permission.BLUETOOTH_SCAN" tools:targetApi="s" />
-<uses-permission android:name="android.permission.BLUETOOTH_CONNECT" tools:targetApi="s" />
-<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-```
-
-Finally, point the shell at your web app's URL via the root `capacitor.config.ts` — the same
-file and the same `server.url` used for iOS (see iOS step 5 above).
-
-#### ⚠️ Android's connect handshake has prerequisites iOS handles internally
-
-The Android SDK leaves three steps to the caller, and skipping any of them fails the same,
-misleading way: the scan finds the device, `connectBleDevice()` resolves, and then
-`connectState` reports `failed` — it looks like a Bluetooth problem when it isn't one.
-`PlaudSdkPlugin.java` does all three, so a verbatim copy needs no extra work — but don't
-"simplify" them away:
-
-1. **`initSDK` repoints the Partner API.** The SDK's partner Retrofit client hardcodes
-   `https://platform-jp.plaud.ai` and does *not* follow `customDomain`, so a `platform-us`
-   token 401s on gen-key, the partner RSA key pair never arrives, and every handshake after it
-   fails. The plugin calls `NiceBuildSdk.INSTANCE.getPartnerApiManager().updateBaseUrl(...)`
-   before `PlaudDeviceAgent.initSDK`.
-2. **`connectBleDevice` waits for the partner key pair** (`NiceBuildSdk.ensurePartnerDataReady`,
-   10s cap) — `initSDK` fetches it over HTTP asynchronously, so on a cold start it is usually
-   still in flight when the user taps a scan result.
-3. **…then signs the serial number** (`NiceBuildSdk.signDeviceSnAsync`) — the handshake reads
-   the stored `snSignature`, and sends an empty one without this. The device type comes from
-   the SN prefix (`881` notepro, `880` notepin, `882` notepins, else `note`).
-
-Every connect logs `partnerReady=` under the `PlaudSdk` tag; a `false` there is the first thing
-to check when a handshake fails after a successful scan.
-
-#### Android build requirements
-
-| | |
-|---|---|
-| `minSdkVersion` | 24 |
-| `compileSdkVersion` / `targetSdkVersion` | 36 |
-| Java source/target compatibility | 21 |
-| Gradle / Android Gradle Plugin | 8.14.3 / 8.13.0 |
-
-Run on a **physical Android device** — the emulator has no Bluetooth radio.
+Finally, point the shell at your web app's URL via the root `capacitor.config.ts` — the same file and the same `server.url` used for iOS (see iOS step 5 above).
 
 ### Step 3: Use the Plaud SDK in your Web App
 
@@ -381,32 +307,3 @@ Calling the PlaudSdk pushes data through the Capacitor bridge to the native code
 │   ← 3 × .xcframework         │  │  ← plaud-sdk.aar              │
 └──────────────────────────────┘  └───────────────────────────────┘
 ```
-
-### Where the platforms differ
-
-The JS surface is identical, but four native behaviors are not:
-
-| | iOS | Android |
-|---|---|---|
-| BLE permissions | Granted via `Info.plist` usage strings | Runtime permission request — `startScan()` handles it internally, and `connectBleDevice()` re-checks `BLUETOOTH_CONNECT`, so the JS flow is unchanged |
-| Device identity | CoreBluetooth UUID | MAC address, emitted as `uuid` on `scanResult` (plus an explicit `macAddress` field) so `connectBleDevice` works unchanged |
-| `blePenState` event | 7 values | 4 values — the three iOS-only ones are omitted rather than faked |
-| Connection diagnostics | Not exposed | Extra Android-only events — `connectFail` (why a connect failed), `connectStage` (handshake step trace), `handshakeWaitSure` (pen is waiting for a physical confirmation), `btStatus`, `scanFail`. See below |
-
-#### Android connection diagnostics
-
-Android's `PlaudDeviceAgentListener` collapses every connection failure — handshake rejected,
-serial-number check failed, token mismatch, GATT timeout, pen busy recording, user declined on
-the device — into a single `bleConnectState(2)`, and drops the SDK's stage trace and its
-"waiting for the user to confirm on the device" callback entirely. A failed connect therefore
-looks like nothing happened at all.
-
-`PlaudSdkPlugin` works around this by also attaching a raw `BleAgentListener` to the SDK's
-transport agent (`TntAgent`) after `initSDK`, and forwarding what that layer knows as the
-Android-only events above. Everything it sees is also written to logcat:
-
-```bash
-adb logcat -s PlaudSdk:V BleAgentImpl:V
-```
-
-These events are additive — `connectState` still behaves exactly as before on both platforms.

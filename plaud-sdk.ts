@@ -3,9 +3,21 @@ import { registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 /** A device surfaced by the SDK's `bleScanResult` callback. */
 export interface PlaudScanDevice {
   name: string;
+  /**
+   * Stable scan-time identifier to pass back to `connectBleDevice`. On iOS this is the
+   * CoreBluetooth peripheral UUID; on Android, which has no such handle, it is the device's
+   * MAC address. Treat it as an opaque token — the same `connectBleDevice({ uuid })` call
+   * works on both platforms.
+   */
   uuid: string;
+  /** Android only: the MAC address, also mirrored into `uuid`. Absent on iOS. */
+  macAddress?: string;
   serialNumber: string;
   rssi: number;
+  /**
+   * iOS reports this from the scan record. Android's scan record has no WiFi-capability
+   * flag, so there it stays `false` until a device is connected.
+   */
   supportWiFi: boolean;
 }
 
@@ -20,14 +32,43 @@ export interface PlaudConnectState {
   state: number;
 }
 
+/**
+ * Android only. Why a connection attempt failed, read from the SDK's transport layer — the
+ * detail the `connectState` event can't carry, since the SDK collapses every failure mode
+ * into `failed: true`. `reason` is the SDK's enum name: `HANDSHAKE_FAIL`, `SN_NOT_MATCH`,
+ * `TOKEN_NOT_MARCH`, `TIME_OUT`, `BLE_CONNECT_FAILED`, `RECORDING_NOW` (pen busy),
+ * `USER_REFUSE` (declined on the device), `MODE_NOT_MATCH` (pen not in connect mode),
+ * `SSN_FAILED`, `APP_KEY_NOT_MATCH`, `SYNC_TIME_FAIL`, `HANDSHAKE_CMD_SEND_FAIL`,
+ * `UUID_IS_EMPTY` — or `permissionDenied` when BLUETOOTH_CONNECT was refused.
+ */
+export interface PlaudConnectFail {
+  mac: string | null;
+  reason: string | null;
+  code?: number;
+  message?: string | null;
+}
+
+/**
+ * Android only. A step of the connect/handshake sequence (`gatt_connect`, `first_handshake`,
+ * `handshake_get_ssn`, …), with `message` set when that step carries an error. Useful for
+ * seeing exactly how far a failing connect got.
+ */
+export interface PlaudConnectStage {
+  mac: string | null;
+  stage: string;
+  message: string | null;
+}
+
 export interface PlaudPenState {
   state: number;
   privacy: number;
   keyState: number;
   uDisk: number;
-  findMyToken: number;
-  hasSndpKey: number;
-  deviceAccessToken: number;
+  // The iOS SDK's pen-state callback carries three values the Android one does not, so these
+  // are absent on Android rather than reported as a misleading 0.
+  findMyToken?: number;
+  hasSndpKey?: number;
+  deviceAccessToken?: number;
 }
 
 /** A recording stored on the device, from the `fileList` event. */
@@ -39,7 +80,10 @@ export interface PlaudFile {
   channels: number;
   isOgg: boolean;
   isMusic: boolean;
-  /** Duration in seconds. */
+  /**
+   * Duration in seconds. On Android this is derived from the raw-opus frame arithmetic, so
+   * for `isOgg` recordings it reads slightly long (it doesn't subtract ogg page headers).
+   */
   duration: number;
 }
 
@@ -83,12 +127,18 @@ export interface PlaudRecordResume {
 export type PlaudAudioFormat = "pcm" | "mp3" | "wav" | "opus";
 
 /**
- * JS interface for the native `PlaudSdk` Capacitor plugin
- * (see ios/PlaudPlugin/Sources/PlaudPlugin/PlaudSdkPlugin.swift).
+ * JS interface for the native `PlaudSdk` Capacitor plugin. One surface, two
+ * implementations, kept deliberately at parity:
+ *   - iOS:     ios/PlaudPlugin/Sources/PlaudPlugin/PlaudSdkPlugin.swift
+ *   - Android: android/app/src/main/java/ai/plaud/pwademo/PlaudSdkPlugin.java
  *
- * The native side is only present inside the Capacitor iOS shell; in a plain
- * browser these calls reject with "not implemented". Guard with
- * `Capacitor.isNativePlatform()` at the call site.
+ * The native side is only present inside a Capacitor shell; in a plain browser these calls
+ * reject with "not implemented". Guard with `Capacitor.isNativePlatform()` at the call site.
+ *
+ * The few places the two platforms can't be made identical are called out on the individual
+ * types above (`uuid`/`macAddress`, `supportWiFi`, `PlaudPenState`'s optional fields,
+ * `PlaudFile.duration`). Notably, `startScan` also acquires Android's runtime Bluetooth
+ * permissions itself, so callers need no platform-specific code.
  */
 export interface PlaudSdkPlugin {
   /**
@@ -122,8 +172,9 @@ export interface PlaudSdkPlugin {
   /** Request the recording list; results arrive via the `fileList` event. */
   getFileList(options?: { startSessionId?: number }): Promise<void>;
   /**
-   * Decode a recording to a file in the app's Documents/PlaudExports dir. Resolves with
-   * the written path; emits `exportProgress` events. `format` defaults to "mp3".
+   * Decode a recording to a file in a private per-app export dir (iOS:
+   * Documents/PlaudExports, Android: files/PlaudExports). Resolves with the written path;
+   * emits `exportProgress` events. `format` defaults to "mp3".
    */
   exportAudio(options: {
     sessionId: number;
@@ -160,6 +211,34 @@ export interface PlaudSdkPlugin {
   addListener(
     eventName: "connectState",
     listener: (data: PlaudConnectState) => void,
+  ): Promise<PluginListenerHandle>;
+  /** Android only — see {@link PlaudConnectFail}. Never fires on iOS. */
+  addListener(
+    eventName: "connectFail",
+    listener: (data: PlaudConnectFail) => void,
+  ): Promise<PluginListenerHandle>;
+  /** Android only — see {@link PlaudConnectStage}. Never fires on iOS. */
+  addListener(
+    eventName: "connectStage",
+    listener: (data: PlaudConnectStage) => void,
+  ): Promise<PluginListenerHandle>;
+  /**
+   * Android only. The pen is waiting for the user to confirm pairing with a press on the
+   * device itself; nothing further happens until they do or `timeoutMs` elapses.
+   */
+  addListener(
+    eventName: "handshakeWaitSure",
+    listener: (data: { mac: string | null; timeoutMs: number }) => void,
+  ): Promise<PluginListenerHandle>;
+  /** Android only. Raw Bluetooth transport status (`CONNECTING`/`CONNECTED`/`DISCONNECTED`/…). */
+  addListener(
+    eventName: "btStatus",
+    listener: (data: { mac: string | null; status: string | null }) => void,
+  ): Promise<PluginListenerHandle>;
+  /** Android only. The OS refused to start an LE scan. */
+  addListener(
+    eventName: "scanFail",
+    listener: (data: { reason: string | null }) => void,
   ): Promise<PluginListenerHandle>;
   addListener(
     eventName: "penState",
@@ -204,8 +283,8 @@ export const PlaudSdk = registerPlugin<PlaudSdkPlugin>("PlaudSdk");
 /**
  * Read an exported file's raw bytes through the native bridge. Use this instead of
  * `fetch(Capacitor.convertFileSrc(path))`, which fails when the WebView loads a remote
- * origin (the `capacitor://…/_capacitor_file_/…` URL is a cross-origin custom scheme and
- * WKWebView's CORS check blocks the fetch).
+ * origin: the `…/_capacitor_file_/…` URL is cross-origin to the Vercel page, so the
+ * WebView's CORS check blocks the fetch on both iOS and Android.
  */
 export async function readExportedFile(path: string): Promise<ArrayBuffer> {
   const { data } = await PlaudSdk.readFile({ path });
