@@ -11,15 +11,11 @@ import {
 import { transcribeExportedFile } from "@/app/transcription-runner";
 import { FileModal, type FileResult } from "./file-modal";
 import useSWR from "swr";
-import { RadarIcon ,FileTextIcon, UnlinkIcon, FileAudioIcon, RefreshIcon } from "./icons";
+import { RadarIcon, FileTextIcon, UnlinkIcon, FileAudioIcon, RefreshIcon } from "./icons";
 
 const PLAUD_DOMAIN = "platform-us.plaud.ai";
 const USER_ID = "jackmu";
 
-/**
- * Turn the Android SDK's connect-failure enum into something a person can act on. Anything
- * unrecognised falls through with the raw reason so it's still visible.
- */
 function connectFailHint(reason: string | null, message?: string | null): string {
   switch (reason) {
     case "USER_REFUSE":
@@ -46,7 +42,6 @@ function connectFailHint(reason: string | null, message?: string | null): string
   }
 }
 
-/* Map a freeform status string to a tone + dot color. */
 function statusTone(status: string): "ok" | "err" | "live" | "idle" {
   const s = status.toLowerCase();
   if (s.includes("record") || s.includes("scanning") || s.includes("connecting"))
@@ -111,10 +106,10 @@ export default function Home() {
           setConnected(connected);
           if (connected) setScanning(false);
           // Once connected, pull the on-device recording list.
-          if (connected) PlaudSdk.getFileList({ startSessionId: 0 }).catch(() => {});
+          if (connected) PlaudSdk.getFileList({ startSessionId: 0 }).catch(() => { });
         }),
-        // Android only: the reason behind a `connectState` failure, which that event can't
-        // carry. Without this a failed connect is indistinguishable from a hang.
+        //
+        // Android only
         await PlaudSdk.addListener("connectFail", ({ reason, message, code }) => {
           console.log("[Plaud] connectFail", { reason, message, code });
           setStatus("connection failed");
@@ -146,9 +141,7 @@ export default function Home() {
             },
           }));
         }),
-        // Recording is driven by the physical device, not the app. Surface the
-        // start/stop/pause/resume events so they're visible, and refresh the file
-        // list once a recording stops so the new file shows up to export.
+
         await PlaudSdk.addListener("recordStart", (r) => {
           console.log("[Plaud] recordStart", r);
           setIsLive(true);
@@ -159,10 +152,9 @@ export default function Home() {
           setIsLive(false);
           setRecording(
             `Stopped · session ${r.sessionId} · ${(r.fileSize / 1024).toFixed(0)} KB` +
-              (r.fileExist ? "" : " (no file)"),
+            (r.fileExist ? "" : " (no file)"),
           );
-          // A fresh recording won't be in the list fetched at connect — refresh it.
-          PlaudSdk.getFileList({ startSessionId: 0 }).catch(() => {});
+          PlaudSdk.getFileList({ startSessionId: 0 }).catch(() => { });
         }),
         await PlaudSdk.addListener("recordPause", (r) => {
           console.log("[Plaud] recordPause", r);
