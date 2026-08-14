@@ -32,6 +32,33 @@ export interface PlaudConnectState {
   state: number;
 }
 
+/**
+ * Android only. Why a connection attempt failed, read from the SDK's transport layer — the
+ * detail the `connectState` event can't carry, since the SDK collapses every failure mode
+ * into `failed: true`. `reason` is the SDK's enum name: `HANDSHAKE_FAIL`, `SN_NOT_MATCH`,
+ * `TOKEN_NOT_MARCH`, `TIME_OUT`, `BLE_CONNECT_FAILED`, `RECORDING_NOW` (pen busy),
+ * `USER_REFUSE` (declined on the device), `MODE_NOT_MATCH` (pen not in connect mode),
+ * `SSN_FAILED`, `APP_KEY_NOT_MATCH`, `SYNC_TIME_FAIL`, `HANDSHAKE_CMD_SEND_FAIL`,
+ * `UUID_IS_EMPTY` — or `permissionDenied` when BLUETOOTH_CONNECT was refused.
+ */
+export interface PlaudConnectFail {
+  mac: string | null;
+  reason: string | null;
+  code?: number;
+  message?: string | null;
+}
+
+/**
+ * Android only. A step of the connect/handshake sequence (`gatt_connect`, `first_handshake`,
+ * `handshake_get_ssn`, …), with `message` set when that step carries an error. Useful for
+ * seeing exactly how far a failing connect got.
+ */
+export interface PlaudConnectStage {
+  mac: string | null;
+  stage: string;
+  message: string | null;
+}
+
 export interface PlaudPenState {
   state: number;
   privacy: number;
@@ -184,6 +211,34 @@ export interface PlaudSdkPlugin {
   addListener(
     eventName: "connectState",
     listener: (data: PlaudConnectState) => void,
+  ): Promise<PluginListenerHandle>;
+  /** Android only — see {@link PlaudConnectFail}. Never fires on iOS. */
+  addListener(
+    eventName: "connectFail",
+    listener: (data: PlaudConnectFail) => void,
+  ): Promise<PluginListenerHandle>;
+  /** Android only — see {@link PlaudConnectStage}. Never fires on iOS. */
+  addListener(
+    eventName: "connectStage",
+    listener: (data: PlaudConnectStage) => void,
+  ): Promise<PluginListenerHandle>;
+  /**
+   * Android only. The pen is waiting for the user to confirm pairing with a press on the
+   * device itself; nothing further happens until they do or `timeoutMs` elapses.
+   */
+  addListener(
+    eventName: "handshakeWaitSure",
+    listener: (data: { mac: string | null; timeoutMs: number }) => void,
+  ): Promise<PluginListenerHandle>;
+  /** Android only. Raw Bluetooth transport status (`CONNECTING`/`CONNECTED`/`DISCONNECTED`/…). */
+  addListener(
+    eventName: "btStatus",
+    listener: (data: { mac: string | null; status: string | null }) => void,
+  ): Promise<PluginListenerHandle>;
+  /** Android only. The OS refused to start an LE scan. */
+  addListener(
+    eventName: "scanFail",
+    listener: (data: { reason: string | null }) => void,
   ): Promise<PluginListenerHandle>;
   addListener(
     eventName: "penState",

@@ -2,6 +2,7 @@ package ai.plaud.pwademo;
 
 import android.Manifest;
 import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
 import android.content.Context;
 import android.content.pm.PackageManager;
@@ -10,6 +11,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Base64;
+import android.util.Log;
 
 import androidx.core.content.ContextCompat;
 
@@ -21,10 +23,14 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
+import com.tinnotech.penblesdk.Constants;
 import com.tinnotech.penblesdk.TntAgent;
 import com.tinnotech.penblesdk.core.IBleAgent;
 import com.tinnotech.penblesdk.entity.BleDevice;
 import com.tinnotech.penblesdk.entity.BleFile;
+import com.tinnotech.penblesdk.entity.BluetoothStatus;
+import com.tinnotech.penblesdk.entity.bean.blepkg.response.*;
+import com.tinnotech.penblesdk.impl.ble.BleAgentListener;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -40,7 +46,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
+import kotlin.Unit;
+
+import sdk.NiceBuildSdk;
 import sdk.PlaudDeviceAgent;
 import sdk.PlaudDeviceAgentListener;
 import sdk.audio.AudioExportFormat;
@@ -90,6 +100,16 @@ public class PlaudSdkPlugin extends Plugin implements PlaudDeviceAgentListener {
     static final String PERM_CONNECT = "bluetoothConnect";
     static final String PERM_LOCATION = "location";
 
+    /** Logcat tag for the whole bridge — {@code adb logcat -s PlaudSdk:V BleAgentImpl:V}. */
+    private static final String TAG = "PlaudSdk";
+
+    /**
+     * How long {@link #prepareHandshake} waits for the partner key fetch and SN signing before
+     * connecting anyway. Same 10s cap the Expo module uses: long enough for the HTTP round
+     * trips on a cold start, short enough that a hung fetch doesn't look like a frozen UI.
+     */
+    private static final long HANDSHAKE_PREP_TIMEOUT_MS = 10_000L;
+
     /**
      * {@code connectBleDevice} needs the actual {@link BleDevice} the SDK handed us during a
      * scan — JS only carries identifiers, so we retain the scanned objects and look them up.
@@ -119,6 +139,14 @@ public class PlaudSdkPlugin extends Plugin implements PlaudDeviceAgentListener {
      */
     private boolean isScanning = false;
 
+    /**
+     * Raw transport-level listener, attached once after {@code initSDK}. See
+     * {@link BleAgentDiagnostics} — it exists because {@code PlaudDeviceAgentListener} collapses
+     * every connection failure into {@code bleConnectState(2)} with no reason attached.
+     */
+    private final BleAgentDiagnostics diagnostics = new BleAgentDiagnostics();
+    private boolean diagnosticsAttached = false;
+
     private final Handler main = new Handler(Looper.getMainLooper());
 
     // MARK: - Connection lifecycle
@@ -139,12 +167,45 @@ public class PlaudSdkPlugin extends Plugin implements PlaudDeviceAgentListener {
         main.post(() -> {
             this.userId = uid;
             PlaudDeviceAgent.setListener(this);
+            // Handshake prerequisite 1 of 3 (see prepareHandshake for 2 and 3). The SDK's
+            // Partner API — the gen-key / sn-sign endpoints the device handshake depends on —
+            // lives on its own Retrofit client, which hardcodes https://platform-jp.plaud.ai
+            // and does *not* follow customDomain. Left alone, a platform-us token 401s on
+            // gen-key, the partner RSA key pair never arrives, and every handshake after it
+            // fails: the scan still finds the device, connectBleDevice() still resolves, and
+            // then connectState reports failed. Repoint it before initSDK kicks off the fetch.
+            try {
+                NiceBuildSdk.INSTANCE.getPartnerApiManager()
+                    .updateBaseUrl("https://" + domain);
+            } catch (Throwable t) {
+                // Best-effort, matching the Expo module: a connect attempt against the
+                // default host is still better than failing initSDK outright.
+                Log.w(TAG, "could not repoint the Partner API base URL — handshakes will "
+                    + "fail unless this token is valid on platform-jp", t);
+            }
             // The SDK prefixes customDomain with "https://" itself, so it takes the domain
             // only — the same contract as iOS. The Context is Android-only; the SDK keeps
             // the application context internally.
             PlaudDeviceAgent.initSDK(getContext(), token, domain);
+            attachDiagnostics();
+            Log.i(TAG, "initSDK domain=" + domain + " userId=" + uid);
             call.resolve();
         });
+    }
+
+    /**
+     * Attach {@link BleAgentDiagnostics} to the SDK's transport agent. Only possible once
+     * {@code initSDK} has built {@code TntAgent}, and only worth doing once.
+     */
+    private void attachDiagnostics() {
+        if (diagnosticsAttached) return;
+        TntAgent tnt = TntAgent.getInstant();
+        if (tnt == null) {
+            Log.w(TAG, "TntAgent unavailable after initSDK — connection diagnostics disabled");
+            return;
+        }
+        tnt.addBleAgentListeners(diagnostics);
+        diagnosticsAttached = true;
     }
 
     @PluginMethod
@@ -192,6 +253,7 @@ public class PlaudSdkPlugin extends Plugin implements PlaudDeviceAgentListener {
         // Bail if scanning was cancelled (stopScan / connect) while we were waiting.
         if (!isScanning) return;
         if (isBluetoothPoweredOn()) {
+            Log.i(TAG, "startScan");
             PlaudDeviceAgent.startScan();
             return;
         }
@@ -207,6 +269,7 @@ public class PlaudSdkPlugin extends Plugin implements PlaudDeviceAgentListener {
     public void stopScan(PluginCall call) {
         main.post(() -> {
             isScanning = false;
+            Log.i(TAG, "stopScan");
             PlaudDeviceAgent.stopScan();
             call.resolve();
         });
@@ -220,6 +283,32 @@ public class PlaudSdkPlugin extends Plugin implements PlaudDeviceAgentListener {
      */
     @PluginMethod
     public void connectBleDevice(PluginCall call) {
+        // Android-only step with no iOS counterpart: opening a GATT connection needs
+        // BLUETOOTH_CONNECT on API 31+, and the SDK swallows the SecurityException it would
+        // otherwise throw (BleAgentImpl wraps the whole connect block in a bare `catch
+        // (Exception)` that only logs) — the connect would then fail completely silently, with
+        // no connectState event at all. Request it here instead. Normally it was already
+        // granted alongside BLUETOOTH_SCAN in startScan, so this is a no-op.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+            && !granted(Manifest.permission.BLUETOOTH_CONNECT)) {
+            requestPermissionForAlias(PERM_CONNECT, call, "connectPermissionCallback");
+            return;
+        }
+        beginConnect(call);
+    }
+
+    @PermissionCallback
+    private void connectPermissionCallback(PluginCall call) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+            && !granted(Manifest.permission.BLUETOOTH_CONNECT)) {
+            emit("connectFail", jsObject("reason", "permissionDenied"));
+            call.reject("BLUETOOTH_CONNECT permission denied — cannot open a connection");
+            return;
+        }
+        beginConnect(call);
+    }
+
+    private void beginConnect(PluginCall call) {
         final String uuid = call.getString("uuid");
         final String serial = call.getString("serialNumber");
         // The native app always connects with a device token (the app-level userId) so the
@@ -234,13 +323,119 @@ public class PlaudSdkPlugin extends Plugin implements PlaudDeviceAgentListener {
                 call.reject("Unknown device — scan first, then connect by uuid or serialNumber");
                 return;
             }
-            if (token != null && !token.isEmpty()) {
-                PlaudDeviceAgent.connectBleDevice(device, token);
-            } else {
-                PlaudDeviceAgent.connectBleDevice(device);
+            if (bleAgent() == null) {
+                call.reject("SDK not initialised — call initSDK before connecting");
+                return;
             }
-            call.resolve();
+            if (!isBluetoothPoweredOn()) {
+                call.reject("Bluetooth is off");
+                return;
+            }
+            // Always stop the scan natively rather than trusting the caller to have done it.
+            // An LE scan running concurrently with connectGatt() is the classic source of
+            // Android's GATT error 133, and the SDK's connectBleDevice does not stop it
+            // itself. Harmless when the scan is already stopped.
+            PlaudDeviceAgent.stopScan();
+            // Handshake prerequisites 2 and 3 are asynchronous, so the actual connect happens
+            // in the callback rather than inline here.
+            prepareHandshake(device, () -> performConnect(call, device, token));
         });
+    }
+
+    /**
+     * Handshake prerequisites 2 and 3 of 3, which the iOS SDK performs internally but the
+     * Android one leaves to the caller (prerequisite 1 is the Partner API base URL, set in
+     * {@link #initSDK}). Skipping either looks exactly like a Bluetooth problem from JS: the
+     * scan finds the device, {@code connectBleDevice()} resolves, then {@code connectState}
+     * reports {@code failed}.
+     *
+     * <ol>
+     *   <li>Wait for the partner RSA key pair. {@code initSDK} fetches it over HTTP
+     *       asynchronously, so on a cold start it is usually still in flight by the time the
+     *       user taps a scan result. {@code ensurePartnerDataReady} returns immediately when
+     *       the data is already there.</li>
+     *   <li>Sign and store the device's serial number — the handshake reads the stored
+     *       {@code snSignature}, and sends an empty one without this.</li>
+     * </ol>
+     *
+     * <p>Both steps are best-effort: on failure we connect anyway and let the SDK report the
+     * real error through {@code bleConnectFail}, which matches the Expo module and Plaud's own
+     * reference apps. {@code done} always runs, exactly once, on the main thread — a hung
+     * partner fetch must not strand the {@link PluginCall} unresolved forever, so a
+     * {@link #HANDSHAKE_PREP_TIMEOUT_MS} deadline races the callbacks.
+     */
+    private void prepareHandshake(BleDevice device, Runnable done) {
+        // Set on the main thread only, so the timeout and the callback path can't both win.
+        AtomicBoolean fired = new AtomicBoolean(false);
+        Runnable proceed = () -> main.post(() -> {
+            if (fired.compareAndSet(false, true)) done.run();
+        });
+        main.postDelayed(proceed, HANDSHAKE_PREP_TIMEOUT_MS);
+
+        // signAndStoreDeviceSn is a Kotlin suspend function, uncallable from Java; the SDK
+        // ships these two callback wrappers over it and over the partner-data fetch, both of
+        // which hop to Dispatchers.IO themselves.
+        try {
+            NiceBuildSdk.ensurePartnerDataReady(ready -> {
+                if (!Boolean.TRUE.equals(ready)) {
+                    Log.w(TAG, "partner data (RSA key pair) is not ready — the handshake will "
+                        + "likely fail; check that the userAccessToken is valid for the "
+                        + "customDomain passed to initSDK");
+                }
+                String sn = device.getSerialNumber();
+                if (sn == null || sn.isEmpty()) {
+                    // Nothing to sign — a scan result without an SN can't be bound anyway.
+                    proceed.run();
+                    return Unit.INSTANCE;
+                }
+                try {
+                    NiceBuildSdk.signDeviceSnAsync(deviceType(sn), sn, signed -> {
+                        Log.i(TAG, "snSign sn=" + sn + " type=" + deviceType(sn)
+                            + " ok=" + signed);
+                        proceed.run();
+                        return Unit.INSTANCE;
+                    });
+                } catch (Throwable t) {
+                    Log.w(TAG, "signDeviceSnAsync failed — connecting without an snSignature", t);
+                    proceed.run();
+                }
+                return Unit.INSTANCE;
+            });
+        } catch (Throwable t) {
+            Log.w(TAG, "ensurePartnerDataReady failed — connecting without partner data", t);
+            proceed.run();
+        }
+    }
+
+    /**
+     * The connect itself, once {@link #prepareHandshake} has satisfied its prerequisites.
+     * Main thread only.
+     */
+    private void performConnect(PluginCall call, BleDevice device, String token) {
+        // The handshake's bind token is not the deviceToken we pass in — the SDK derives
+        // it from the `sub` claim of the initSDK JWT. When that comes back empty (token
+        // isn't a 3-part JWT, or carries no `sub`), the pen handshake aborts immediately
+        // with the SDK's misleading UUID_IS_EMPTY code. Surface it here so that failure
+        // reads as "wrong access token" rather than "Bluetooth problem".
+        String bindToken = handshakeToken();
+        if (bindToken == null || bindToken.isEmpty()) {
+            Log.w(TAG, "handshake bind token is empty — the SDK could not read a `sub` "
+                + "claim from the initSDK userAccessToken; the pen handshake will fail "
+                + "with UUID_IS_EMPTY");
+        }
+        Log.i(TAG, "connect mac=" + device.getMacAddress()
+            + " sn=" + device.getSerialNumber()
+            + " version=" + device.getVersionName()
+            + " bond=" + bondState(device.getMacAddress())
+            + " partnerReady=" + isPartnerDataReady()
+            + " bindToken=" + (bindToken == null || bindToken.isEmpty() ? "<EMPTY>" : bindToken)
+            + " deviceToken=" + (token == null || token.isEmpty() ? "<none>" : token));
+        if (token != null && !token.isEmpty()) {
+            PlaudDeviceAgent.connectBleDevice(device, token);
+        } else {
+            PlaudDeviceAgent.connectBleDevice(device);
+        }
+        call.resolve();
     }
 
     @PluginMethod
@@ -476,6 +671,7 @@ public class PlaudSdkPlugin extends Plugin implements PlaudDeviceAgentListener {
         // Distinguish failure from a normal disconnect so the UI doesn't sit on
         // "connecting…" forever (matches the iOS plugin and the native DeviceManager).
         boolean failed = (state == 2 || state == -1 || state == -2);
+        Log.i(TAG, "connectState state=" + state + " failed=" + failed);
         JSObject data = new JSObject();
         data.put("connected", state == 1);
         data.put("failed", failed);
@@ -622,6 +818,44 @@ public class PlaudSdkPlugin extends Plugin implements PlaudDeviceAgentListener {
         return agent != null && agent.isSupportWifi();
     }
 
+    /**
+     * The bind token the SDK will actually put on the wire during the pen handshake — the
+     * {@code sub} claim of the {@code initSDK} JWT. Tolerates a null because it depends on
+     * SDK state that may not be populated yet.
+     */
+    private static String handshakeToken() {
+        try {
+            return NiceBuildSdk.parseUserIdFromJWT();
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * Whether the partner RSA key pair {@code initSDK} fetches has landed. Logged on every
+     * connect: a {@code false} here is the single most likely cause of a handshake that fails
+     * after a successful scan.
+     */
+    private static boolean isPartnerDataReady() {
+        try {
+            return NiceBuildSdk.INSTANCE.isPartnerDataReady();
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * Device type for {@code signDeviceSnAsync}, derived from the serial number prefix. The
+     * SDK matches on these exact strings and silently signs nothing useful for an unknown
+     * type, so the fallback mirrors the Expo module's.
+     */
+    private static String deviceType(String sn) {
+        if (sn.startsWith("881")) return "notepro";
+        if (sn.startsWith("880")) return "notepin";
+        if (sn.startsWith("882")) return "notepins";
+        return "note";
+    }
+
     private static IBleAgent bleAgent() {
         // TntAgent is only available once the SDK has been initialised and has built its
         // agent, so every accessor above tolerates a null.
@@ -630,6 +864,32 @@ public class PlaudSdkPlugin extends Plugin implements PlaudDeviceAgentListener {
             return tnt != null ? tnt.getBleAgent() : null;
         } catch (Throwable t) {
             return null;
+        }
+    }
+
+    /**
+     * The OS-level bond state for a MAC, as a name. Worth logging on every connect: a stale
+     * BONDED entry (the pen was paired to this phone by another app, then forgot the link on
+     * its side) makes Android's GATT service discovery hang silently — {@code
+     * discoverServices()} returns true and {@code onServicesDiscovered} never fires — which
+     * the SDK can only report, 10s later, as an undifferentiated {@code TIME_OUT}.
+     */
+    private String bondState(String mac) {
+        try {
+            BluetoothManager manager =
+                (BluetoothManager) getContext().getSystemService(Context.BLUETOOTH_SERVICE);
+            BluetoothAdapter adapter = manager != null ? manager.getAdapter() : null;
+            if (adapter == null || mac == null) return "unknown";
+            switch (adapter.getRemoteDevice(mac).getBondState()) {
+                case BluetoothDevice.BOND_BONDED: return "BONDED";
+                case BluetoothDevice.BOND_BONDING: return "BONDING";
+                case BluetoothDevice.BOND_NONE: return "NONE";
+                default: return "unknown";
+            }
+        } catch (Throwable t) {
+            // getBondState needs BLUETOOTH_CONNECT, and getRemoteDevice rejects a malformed
+            // MAC; neither is worth failing a connect over.
+            return "unknown";
         }
     }
 
@@ -705,6 +965,115 @@ public class PlaudSdkPlugin extends Plugin implements PlaudDeviceAgentListener {
 
     private void finishExport(ExportCallbackBridge bridge) {
         main.post(() -> exportCallbacks.remove(bridge));
+    }
+
+    /**
+     * Transport-level listener attached straight to {@link TntAgent}, alongside the facade's
+     * own internal one.
+     *
+     * <p>It exists because {@code PlaudDeviceAgentListener} — the facade-level callback
+     * interface the plugin implements — is lossy about failures: every distinct connection
+     * error (handshake rejected, SN check failed, token mismatch, GATT timeout, pen busy
+     * recording, user declined on the device) is collapsed into a single
+     * {@code bleConnectState(2)}, and the facade drops {@code bleConnectStage} and
+     * {@code handshakeWaitSure} on the floor entirely. That is what makes a failed connect
+     * look like "nothing happened" from JS.
+     *
+     * <p>Listening one layer down recovers the reason: {@code connectFail} carries the SDK's
+     * error code/message, {@code connectStage} traces the handshake step by step, and
+     * {@code handshakeWaitSure} says the pen is waiting for the user to confirm pairing on
+     * the device itself — a state the UI otherwise can't distinguish from a hang. Everything
+     * is logged under {@link #TAG} as well, so {@code adb logcat -s PlaudSdk:V BleAgentImpl:V}
+     * shows the full connect trace.
+     *
+     * <p>The interface is wide and mostly about device features the facade already forwards,
+     * so the rest of the methods are deliberately empty.
+     */
+    private final class BleAgentDiagnostics implements BleAgentListener {
+
+        @Override
+        public void bleConnectFail(String mac, Constants.ConnectBleFailed failed) {
+            Log.w(TAG, "connectFail mac=" + mac + " reason=" + failed);
+            JSObject data = new JSObject();
+            data.put("mac", mac);
+            data.put("reason", failed != null ? failed.name() : null);
+            data.put("code", failed != null ? failed.getErrCode() : 0);
+            data.put("message", failed != null ? failed.getErrMsg() : null);
+            emit("connectFail", data);
+        }
+
+        @Override
+        public void bleConnectStage(String mac, String stage, String message) {
+            Log.i(TAG, "connectStage mac=" + mac + " stage=" + stage + " msg=" + message);
+            JSObject data = new JSObject();
+            data.put("mac", mac);
+            data.put("stage", stage);
+            data.put("message", message);
+            emit("connectStage", data);
+        }
+
+        @Override
+        public void btStatusChange(String mac, BluetoothStatus status) {
+            Log.i(TAG, "btStatus mac=" + mac + " status=" + status);
+            JSObject data = new JSObject();
+            data.put("mac", mac);
+            data.put("status", status != null ? status.name() : null);
+            emit("btStatus", data);
+        }
+
+        /**
+         * The pen is asking the user to confirm pairing with a press on the device; nothing
+         * else happens until they do, or until {@code timeoutMs} elapses.
+         */
+        @Override
+        public void handshakeWaitSure(String mac, long timeoutMs) {
+            Log.i(TAG, "handshakeWaitSure mac=" + mac + " timeoutMs=" + timeoutMs);
+            JSObject data = new JSObject();
+            data.put("mac", mac);
+            data.put("timeoutMs", timeoutMs);
+            emit("handshakeWaitSure", data);
+        }
+
+        @Override
+        public void scanFail(Constants.ScanFailed failed) {
+            Log.w(TAG, "scanFail reason=" + failed);
+            emit("scanFail", jsObject("reason", failed != null ? failed.name() : null));
+        }
+
+        @Override
+        public void sendMoreFailDisconnect(String mac) {
+            Log.w(TAG, "sendMoreFailDisconnect mac=" + mac);
+        }
+
+        @Override
+        public void mtuChange(String mac, int mtu, boolean success) {
+            Log.i(TAG, "mtuChange mac=" + mac + " mtu=" + mtu + " success=" + success);
+        }
+
+        // Everything below is either already forwarded by the facade or irrelevant to
+        // diagnosing a connect, and is implemented only to satisfy the interface.
+
+        @Override public void scanBleDeviceReceiver(BleDevice device) {}
+        @Override public void rssiChange(String mac, int rssi) {}
+        @Override public void batteryLevelUpdate(String mac, int level) {}
+        @Override public void chargingStatusChange(String mac, boolean charging) {}
+        @Override public void deviceOpRecordStart(String mac, RecordStartRsp rsp) {}
+        @Override public void deviceOpRecordStop(String mac, RecordStopRsp rsp) {}
+        @Override public void deviceOpRecordPause(String mac, RecordPauseRsp rsp) {}
+        @Override public void deviceOpRecordResume(String mac, RecordResumeRsp rsp) {}
+        @Override public void deviceOpStorageRsp(String mac, StorageRsp rsp) {}
+        @Override public void deviceStatusRsp(String mac, GetStateRsp rsp) {}
+        @Override public void deviceStatusDetailed(String mac, byte[] data) {}
+        @Override public void deviceLogSyncStop(String mac, StopSyncDeviceLogFileRsp rsp) {}
+        @Override public void deviceLogSyncEnd(String mac, SyncDeviceLogFileEndRsp rsp) {}
+        @Override public void deviceLogSyncData(String mac, int a, int b, long c, byte[] data) {}
+        @Override public void deviceFotaResult(String mac, AppFotaPushRsp rsp) {}
+        @Override public void deviceFotaThirdVersion(String mac, GetThirdVersionRsp rsp) {}
+        @Override public void deviceWifiSyncStartRsp(String mac, int status) {}
+        @Override public void deviceSwitchWifiMode(String mac, BtCloseRsp rsp) {}
+        @Override public void motorStatus(String mac, int status) {}
+        @Override public void stickAngles(String mac, AnglesRsp rsp) {}
+        @Override public void deviceNewFeature(byte[] data) {}
     }
 
     /**

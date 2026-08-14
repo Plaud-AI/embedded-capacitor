@@ -16,6 +16,36 @@ import { RadarIcon ,FileTextIcon, UnlinkIcon, FileAudioIcon, RefreshIcon } from 
 const PLAUD_DOMAIN = "platform-us.plaud.ai";
 const USER_ID = "jackmu";
 
+/**
+ * Turn the Android SDK's connect-failure enum into something a person can act on. Anything
+ * unrecognised falls through with the raw reason so it's still visible.
+ */
+function connectFailHint(reason: string | null, message?: string | null): string {
+  switch (reason) {
+    case "USER_REFUSE":
+      return "The device declined pairing — accept the pairing request on the device.";
+    case "RECORDING_NOW":
+      return "The device is recording and can't pair right now — stop the recording first.";
+    case "MODE_NOT_MATCH":
+      return "The device isn't in connect mode — put it in pairing mode and retry.";
+    case "TOKEN_NOT_MARCH":
+      return "Device token mismatch — this device is bound to a different user. Unpair it first.";
+    case "SN_NOT_MATCH":
+    case "SSN_FAILED":
+      return "The device's serial number failed verification against the Plaud servers.";
+    case "TIME_OUT":
+    case "BLE_CONNECT_FAILED":
+      return "Bluetooth connection timed out — move closer to the device and retry.";
+    case "HANDSHAKE_FAIL":
+    case "HANDSHAKE_CMD_SEND_FAIL":
+      return "Pairing handshake failed. If the device is bound elsewhere, unpair it and retry.";
+    case "permissionDenied":
+      return "Bluetooth connect permission was denied — grant it in Settings and retry.";
+    default:
+      return `Connection failed: ${reason ?? "unknown"}${message ? ` (${message})` : ""}`;
+  }
+}
+
 /* Map a freeform status string to a tone + dot color. */
 function statusTone(status: string): "ok" | "err" | "live" | "idle" {
   const s = status.toLowerCase();
@@ -82,6 +112,21 @@ export default function Home() {
           if (connected) setScanning(false);
           // Once connected, pull the on-device recording list.
           if (connected) PlaudSdk.getFileList({ startSessionId: 0 }).catch(() => {});
+        }),
+        // Android only: the reason behind a `connectState` failure, which that event can't
+        // carry. Without this a failed connect is indistinguishable from a hang.
+        await PlaudSdk.addListener("connectFail", ({ reason, message, code }) => {
+          console.log("[Plaud] connectFail", { reason, message, code });
+          setStatus("connection failed");
+          setError(connectFailHint(reason, message));
+        }),
+        await PlaudSdk.addListener("connectStage", ({ stage, message }) => {
+          console.log("[Plaud] connectStage", stage, message ?? "");
+        }),
+        // Android only: the pen wants a physical confirmation before it will pair.
+        await PlaudSdk.addListener("handshakeWaitSure", ({ timeoutMs }) => {
+          console.log("[Plaud] handshakeWaitSure", timeoutMs);
+          setStatus("confirm pairing on the device…");
         }),
         await PlaudSdk.addListener("penState", (s) =>
           setStatus(`pen state ${s.state} (key ${s.keyState})`),

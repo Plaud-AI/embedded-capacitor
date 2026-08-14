@@ -290,6 +290,29 @@ ext {
 Finally, point the shell at your web app's URL via the root `capacitor.config.ts` — the same
 file and the same `server.url` used for iOS (see iOS step 5 above).
 
+#### ⚠️ Android's connect handshake has prerequisites iOS handles internally
+
+The Android SDK leaves three steps to the caller, and skipping any of them fails the same,
+misleading way: the scan finds the device, `connectBleDevice()` resolves, and then
+`connectState` reports `failed` — it looks like a Bluetooth problem when it isn't one.
+`PlaudSdkPlugin.java` does all three, so a verbatim copy needs no extra work — but don't
+"simplify" them away:
+
+1. **`initSDK` repoints the Partner API.** The SDK's partner Retrofit client hardcodes
+   `https://platform-jp.plaud.ai` and does *not* follow `customDomain`, so a `platform-us`
+   token 401s on gen-key, the partner RSA key pair never arrives, and every handshake after it
+   fails. The plugin calls `NiceBuildSdk.INSTANCE.getPartnerApiManager().updateBaseUrl(...)`
+   before `PlaudDeviceAgent.initSDK`.
+2. **`connectBleDevice` waits for the partner key pair** (`NiceBuildSdk.ensurePartnerDataReady`,
+   10s cap) — `initSDK` fetches it over HTTP asynchronously, so on a cold start it is usually
+   still in flight when the user taps a scan result.
+3. **…then signs the serial number** (`NiceBuildSdk.signDeviceSnAsync`) — the handshake reads
+   the stored `snSignature`, and sends an empty one without this. The device type comes from
+   the SN prefix (`881` notepro, `880` notepin, `882` notepins, else `note`).
+
+Every connect logs `partnerReady=` under the `PlaudSdk` tag; a `false` there is the first thing
+to check when a handshake fails after a successful scan.
+
 #### Android build requirements
 
 | | |
@@ -361,10 +384,29 @@ Calling the PlaudSdk pushes data through the Capacitor bridge to the native code
 
 ### Where the platforms differ
 
-The JS surface is identical, but three native behaviors are not:
+The JS surface is identical, but four native behaviors are not:
 
 | | iOS | Android |
 |---|---|---|
-| BLE permissions | Granted via `Info.plist` usage strings | Runtime permission request — `startScan()` handles it internally, so the JS flow is unchanged |
+| BLE permissions | Granted via `Info.plist` usage strings | Runtime permission request — `startScan()` handles it internally, and `connectBleDevice()` re-checks `BLUETOOTH_CONNECT`, so the JS flow is unchanged |
 | Device identity | CoreBluetooth UUID | MAC address, emitted as `uuid` on `scanResult` (plus an explicit `macAddress` field) so `connectBleDevice` works unchanged |
 | `blePenState` event | 7 values | 4 values — the three iOS-only ones are omitted rather than faked |
+| Connection diagnostics | Not exposed | Extra Android-only events — `connectFail` (why a connect failed), `connectStage` (handshake step trace), `handshakeWaitSure` (pen is waiting for a physical confirmation), `btStatus`, `scanFail`. See below |
+
+#### Android connection diagnostics
+
+Android's `PlaudDeviceAgentListener` collapses every connection failure — handshake rejected,
+serial-number check failed, token mismatch, GATT timeout, pen busy recording, user declined on
+the device — into a single `bleConnectState(2)`, and drops the SDK's stage trace and its
+"waiting for the user to confirm on the device" callback entirely. A failed connect therefore
+looks like nothing happened at all.
+
+`PlaudSdkPlugin` works around this by also attaching a raw `BleAgentListener` to the SDK's
+transport agent (`TntAgent`) after `initSDK`, and forwarding what that layer knows as the
+Android-only events above. Everything it sees is also written to logcat:
+
+```bash
+adb logcat -s PlaudSdk:V BleAgentImpl:V
+```
+
+These events are additive — `connectState` still behaves exactly as before on both platforms.
